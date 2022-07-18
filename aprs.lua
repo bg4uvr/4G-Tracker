@@ -26,7 +26,7 @@ local cfg = {
     ["MIN_COURSE"] = 30,
     ["MIN_RUNSPD"] = 3,
     ["MAX_INTERVAL"] = 180,
-    ["STOP_INTERVAL"] = 30
+    ["STOP_INTERVAL"] = 60
 }
 
 local function gpsProcess()
@@ -48,7 +48,7 @@ local function gpsProcess()
             ["course"] = gps.getCourse(),
             ["spd"] = speedknot,
             ["altM"] = gps.getAltitude(),
-            ["altFeet"] = string.match(gps.getAltitude() * 3.2808399, "(%d+)"),
+            ["altFeet"] = string.match(gps.getAltitude() * 3.2808399, "(%d+)")
         }
     end
 end
@@ -154,7 +154,7 @@ local function aprsSend()
                                 local beaconMsg, pointMsg
                                 if cfg.MICE == 1 then
                                     pointMsg = string.format("%s>%s\r\n", sourceCall, miceEncode(gpsData))
-                                    beaconMsg = string.format("%s>%s:>%s\r\n", sourceCall, pointMsg:sub(1, 6),
+                                    beaconMsg = string.format("%s>%s\r\n", string.match(pointMsg, "^(.-:).+"),
                                         cfg.BEACON)
                                 else
                                     pointMsg = string.format("%s>APUVR:=%s%s%s%s%s%s%03d/%03d/A=%06d\r\n", sourceCall,
