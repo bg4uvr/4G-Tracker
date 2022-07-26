@@ -11,6 +11,7 @@ local uartId = 3
 local gpsFlag = false
 local gpsData, gpsDataOld
 local pointTime, beaconTime = 0, 0
+local reason = 0
 local cfg = {
     ["CALLSIGN"] = nil,
     ["PASSCODE"] = nil,
@@ -199,27 +200,25 @@ local function aprsSend()
 end
 
 local function pointSend()
-    local reason
     if (gps.isFix()) then
-        reason = 0
         if not gpsDataOld then
-            reason = 1
-        elseif os.time() - pointTime >= cfg.MIN_INTERVAL then
-            if gpsData.spd > cfg.MIN_RUNSPD then
-                if courseDiff(gpsData.course, gpsDataOld.course) >= cfg.MIN_COURSE then
-                    reason = 2
-                end
-                if os.time() - pointTime >= cfg.MAX_INTERVAL then
-                    reason = reason + 4
-                end
-            elseif os.time() - pointTime >= 60 * cfg.STOP_INTERVAL then
-                reason = 8
+            reason = bit.bor(reason, 1)
+        elseif gpsData.spd > cfg.MIN_RUNSPD then
+            if courseDiff(gpsData.course, gpsDataOld.course) >= cfg.MIN_COURSE then
+                reason = bit.bor(reason, 2)
             end
+            if os.time() - pointTime >= cfg.MAX_INTERVAL then
+                reason = bit.bor(reason, 4)
+            end
+        elseif os.time() - pointTime >= 60 * cfg.STOP_INTERVAL then
+            reason = bit.bor(reason, 8)
         end
-        if reason ~= 0 then
+        if os.time() - pointTime >= cfg.MIN_INTERVAL and reason ~= 0 then
             log.info("GPS信息", gpsData.lat, gpsData.latType, gpsData.lng, gpsData.lngType, gpsData.course,
                 gpsData.spd, gpsData.altM)
-            aprsSend()
+            if aprsSend() then
+                reason = 0
+            end
         end
     end
 end

@@ -6,7 +6,7 @@
     https://github.com/bg4uvr/4G-Tracker
 ]] -- 4G-Tracker
 PROJECT = "4G-Tracker"
-VERSION = "0.0.14"
+VERSION = "0.0.15"
 PRODUCT_KEY = "kSgyVmAwL5cLwNzzx9xA9Z5btFlXAb9E"
 
 require "log"
