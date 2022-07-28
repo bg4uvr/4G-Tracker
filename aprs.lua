@@ -24,10 +24,12 @@ local cfg = {
     ["BEACON"] = string.format("4G-Tracker ver%s https://github.com/bg4uvr/4G-Tracker", VERSION),
     ["BEACON_INTERVAL"] = 60,
     ["MIN_INTERVAL"] = 60,
-    ["MIN_COURSE"] = 30,
-    ["MIN_RUNSPD"] = 3,
-    ["MAX_INTERVAL"] = 180,
-    ["STOP_INTERVAL"] = 60
+    ["MIN_COURSE"] = 20,
+    ["MIN_RUNSPD"] = 5,
+    ["MAX_INTERVAL"] = 120,
+    ["STOP_INTERVAL"] = 30,
+    ["SMART_POINT"] = 1,
+    ["POINT_INTERVAL"] = 60
 }
 
 local function gpsProcess()
@@ -203,21 +205,34 @@ local function pointSend()
     if (gps.isFix()) then
         if not gpsDataOld then
             reason = bit.bor(reason, 1)
-        elseif gpsData.spd > cfg.MIN_RUNSPD then
-            if courseDiff(gpsData.course, gpsDataOld.course) >= cfg.MIN_COURSE then
-                reason = bit.bor(reason, 2)
+        else
+            if cfg.SMART_POINT == 1 then
+                if gpsData.spd >= cfg.MIN_RUNSPD then
+                    if courseDiff(gpsData.course, gpsDataOld.course) >= cfg.MIN_COURSE then
+                        reason = bit.bor(reason, 2)
+                    end
+                    if os.time() - pointTime >= cfg.MAX_INTERVAL then
+                        reason = bit.bor(reason, 4)
+                    end
+                elseif os.time() - pointTime >= 60 * cfg.STOP_INTERVAL then
+                    reason = bit.bor(reason, 8)
+                end
+            else
+                if gpsData.spd >= cfg.MIN_RUNSPD then
+                    if os.time() - pointTime >= cfg.POINT_INTERVAL then
+                        reason = bit.bor(reason, 16)
+                    end
+                elseif os.time() - pointTime >= 60 * cfg.STOP_INTERVAL then
+                    reason = bit.bor(reason, 32)
+                end
             end
-            if os.time() - pointTime >= cfg.MAX_INTERVAL then
-                reason = bit.bor(reason, 4)
-            end
-        elseif os.time() - pointTime >= 60 * cfg.STOP_INTERVAL then
-            reason = bit.bor(reason, 8)
         end
-        if os.time() - pointTime >= cfg.MIN_INTERVAL and reason ~= 0 then
-            log.info("GPS信息", gpsData.lat, gpsData.latType, gpsData.lng, gpsData.lngType, gpsData.course,
-                gpsData.spd, gpsData.altM)
-            if aprsSend() then
-                reason = 0
+
+        if reason > 0 then
+            if cfg.SMART_POINT == 0 or cfg.SMART_POINT == 1 and os.time() - pointTime >= cfg.MIN_INTERVAL then
+                if aprsSend() then
+                    reason = 0
+                end
             end
         end
     end
@@ -381,8 +396,8 @@ local function iniChk(cfgfile)
     end
     if iniFile.MIN_INTERVAL then
         local minI = tonumber(iniFile.MIN_INTERVAL)
-        if not minI or minI < 30 or minI > 120 then
-            log.error("配置校验", "MIN_INTERVAL错误，正确范围为30-120秒")
+        if not minI or minI < 30 or minI > 90 then
+            log.error("配置校验", "MIN_INTERVAL错误，正确范围为30-90秒")
             return false
         end
         iniFile.MIN_INTERVAL = minI
@@ -405,8 +420,8 @@ local function iniChk(cfgfile)
     end
     if iniFile.MAX_INTERVAL then
         local maxI = tonumber(iniFile.MAX_INTERVAL)
-        if not maxI or maxI < 120 or maxI > 300 then
-            log.error("配置校验", "MAX_INTERVAL错误，正确范围为120-300")
+        if not maxI or maxI < 90 or maxI > 300 then
+            log.error("配置校验", "MAX_INTERVAL错误，正确范围为90-300")
             return false
         end
         iniFile.MAX_INTERVAL = maxI
@@ -418,6 +433,21 @@ local function iniChk(cfgfile)
             return false
         end
         iniFile.STOP_INTERVAL = stopI
+    end
+    if iniFile.SMART_POINT then
+        if iniFile.SMART_POINT ~= '0' and iniFile.SMART_POINT ~= '1' then
+            log.error("配置校验", "SMART_POINT错误，只能配置为 0 或 1 ")
+            return false
+        end
+        iniFile.SMART_POINT = tonumber(iniFile.SMART_POINT)
+    end
+    if iniFile.POINT_INTERVAL then
+        local pointInterval = tonumber(iniFile.POINT_INTERVAL)
+        if not pointInterval or pointInterval < 30 or pointInterval > 300 then
+            log.error("配置校验", "POINT_INTERVAL错误，正确范围为30 - 300")
+            return false
+        end
+        iniFile.POINT_INTERVAL = pointInterval
     end
     log.info("配置校验", "配置校验已通过")
     return true, iniFile
