@@ -6,11 +6,12 @@
     https://github.com/bg4uvr/4G-Tracker
 ]] -- 4G-Tracker
 MIN_COURSE = 20
-MIN_RUNSPD = 5
+MIN_RUNSPD = 3
 MIN_INTERVAL = 15
 MAX_INTERVAL = 60
 STOP_INTERVAL = 30
-local gps, agps, gpsFlag, onFlag, gpsDataOld
+TIMEZONE = 8
+local gps, agps, gpsDataOld
 local beaconTime, reason, noNetCnt = 0, 0, 0
 local pointTab = {}
 local cfg = {
@@ -22,11 +23,12 @@ local cfg = {
     ["TABLE"] = "/",
     ["SYMBOL"] = ">",
     ["BEACON"] = string.format("4G-Tracker ver%s https://github.com/bg4uvr/4G-Tracker", VERSION),
-    ["BEACON_INTERVAL"] = 60
+    ["BEACON_INTERVAL"] = 60,
+    ["UDPMODE"] = 0
 }
 
 local function courseDiff(new, old)
-    if not new or not old or new > 359 or new < 0 or old >= 359 or old < 0 then
+    if not new or not old or new > 359 or new < 0 or old > 359 or old < 0 then
         return 0
     end
     local diff = math.abs(new - old)
@@ -37,49 +39,89 @@ local function courseDiff(new, old)
 end
 
 local function gpsProcess()
-    if not gps.isOpen() then
-        gps.open(gps.DEFAULT, {
-            tag = "4G-Tracker"
-        })
-        return
-    elseif not gps.isFix() then
+    if not gps.isOpen() or not gps.isFix() then
         return
     else
-        local gpsData = {}
-        local tLocation = gps.getLocation("DEGREE_MINUTE")
-        gpsData.time = os.time(gps.getUtcTime())
+        local gpsData, tLocation = {}, gps.getLocation("DEGREE_MINUTE")
+        gpsData.time = os.time() - TIMEZONE * 60 * 60
         gpsData.lat = tonumber(tLocation.lat)
         gpsData.lng = tonumber(tLocation.lng)
+        gpsData.spd = tonumber(gps.getOrgSpeed())
         gpsData.cour = gps.getCourse()
         gpsData.alt = gps.getAltitude() * 3.2808399
-        gpsData.spd = tonumber(gps.getOrgSpeed())
+        gpsData.satuse = gps.getUsedSateCnt()
+        gpsData.satview = gps.getViewedSateCnt()
         if tLocation.latType == 'S' then
             gpsData.lat = -gpsData.lat
         end
         if tLocation.latType == 'W' then
             gpsData.lng = -gpsData.lng
         end
-        if not onFlag then
-            reason = bit.bor(reason, 1)
-            onFlag = true
+        if not gpsDataOld then
+            table.insert(pointTab, gpsData)
+            gpsDataOld = gpsData
         else
             if gpsData.spd >= MIN_RUNSPD then
                 if courseDiff(gpsData.cour, gpsDataOld.cour) >= MIN_COURSE then
-                    reason = bit.bor(reason, 2)
+                    reason = bit.bor(reason, 1)
                 end
                 if gpsData.time - gpsDataOld.time >= MAX_INTERVAL then
-                    reason = bit.bor(reason, 4)
+                    reason = bit.bor(reason, 2)
                 end
             elseif gpsData.time - gpsDataOld.time >= 60 * STOP_INTERVAL then
-                reason = bit.bor(reason, 8)
+                reason = bit.bor(reason, 4)
+            end
+            if reason > 0 and gpsData.time - gpsDataOld.time >= MIN_INTERVAL then
+                table.insert(pointTab, gpsData)
+                gpsDataOld = gpsData
+                reason = 0
             end
         end
-        if reason == 1 or reason > 1 and gpsData.time - gpsDataOld.time >= MIN_INTERVAL then
-            table.insert(pointTab, gpsData)
-            gpsDataOld = gpsData
-            reason = 0
+    end
+end
+
+local function socketSend(socketClient, sourceCall)
+    local imei, beaconMsg = string.sub(misc.getImei(), -5, -1),
+        string.format("%s>APUVR:>%s\r\n", sourceCall, cfg.BEACON)
+    if BEACON_INTERVAL ~= 0 and os.time() - beaconTime > cfg.BEACON_INTERVAL * 60 then
+        if not socketClient:send(beaconMsg, 10) then
+            log.warn("服务器", "信标发送超时")
+            return false
+        end
+        beaconTime = os.time()
+        log.info("标信已发送", beaconMsg)
+    end
+    while #pointTab > 0 do
+        local pointData = pointTab[1]
+        local pointTime, latT, lngT = os.date("*t", pointData.time), 'N', 'E'
+        if pointData.lat < 0 then
+            latT = 'S'
+            pointData.lat = -pointData.lat
+        end
+        if pointData.lng < 0 then
+            lngT = 'W'
+            pointData.lng = -pointData.lng
+        end
+        local pointMsg = string.format(
+            "%s>APUVR:/%02d%02d%02dh%07.2f%s%s%08.2f%s%s%03d/%03d/A=%06d imei:*%s rssi:%s sat:%d/%d\r\n", sourceCall,
+            pointTime.hour, pointTime.min, pointTime.sec, pointData.lat, latT, cfg.TABLE, pointData.lng, lngT,
+            cfg.SYMBOL, pointData.cour, pointData.spd, pointData.alt, imei, net.getRssi(), pointData.satuse,
+            pointData.satview)
+        if socketClient:send(pointMsg, 10) then
+            log.info("位置已发送", pointMsg)
+            table.remove(pointTab, 1)
+            if #pointTab > 0 then
+                sys.wait(5000)
+            end
+        else
+            log.warn("服务器", "位置数据发送超时")
+            socketClient:close()
+            return false
         end
     end
+    socketClient:close()
+    log.info("服务器", "发送完成，连接已关闭")
+    return true
 end
 
 local function netProcess()
@@ -92,99 +134,73 @@ local function netProcess()
             sys.wait(10000)
             net.switchFly(false)
         else
-            log.warn("网络", "网络未就绪，稍后自动重试")
-            sys.wait(59000)
+            log.warn("网络", "网络未就绪，将自动重试")
+            sys.waitUntil("IP_READY_IND", 60000)
         end
         return false
     end
     noNetCnt = 0
-    local socketClient = socket.tcp()
-    if not socketClient:connect(cfg.SERVER, cfg.PORT) then
-        log.warn("服务器", "无法连接服务器，稍后自动重试")
-        sys.wait(59000)
-        return false
-    end
-    local loginCmd, recvCnt, sourceCall = false, 0, cfg.CALLSIGN
+    local sourceCall, socketClient = cfg.CALLSIGN, nil
     if cfg.SSID ~= '0' then
         sourceCall = sourceCall .. '-' .. cfg.SSID
     end
-    while true do
-        local result, data = socketClient:recv(10000)
-        if result then
-            if not loginCmd then
-                if (string.find(data, "aprsc") or string.find(data, "javAPRSSrvr")) then
-                    log.info("服务器", "正在登录...")
-                    if socketClient:send(string.format("user %s pass %d vers 4G-Tracker %s\r\n", sourceCall,
-                        cfg.PASSCODE, VERSION), 10) then
-                        loginCmd = true
-                        recvCnt = 0
-                    else
-                        log.warn("服务器", "登录超时")
-                        break
-                    end
-                end
-            else
-                if string.find(data, " verified") then
-                    log.info("服务器", "登录已成功")
-                    local beaconMsg = string.format("%s>APUVR:>%s\r\n", sourceCall, cfg.BEACON)
-                    if BEACON_INTERVAL ~= 0 and os.time() - beaconTime > cfg.BEACON_INTERVAL * 60 then
-                        if not socketClient:send(beaconMsg, 10) then
-                            log.warn("服务器", "信标发送超时")
+    if cfg.UDPMODE == 1 then
+        socketClient = socket.udp()
+        if not socketClient:connect(cfg.SERVER, cfg.PORT, 10) then
+            log.warn("服务器", "连接UDP服务器失败，稍后自动重试")
+            return false
+        else
+            return socketSend(socketClient, sourceCall)
+        end
+    else
+        local loginCmd, recvCnt = false, 0
+        socketClient = socket.tcp()
+        if not socketClient:connect(cfg.SERVER, cfg.PORT, 10) then
+            log.warn("服务器", "连接TCP服务器失败，稍后自动重试")
+            return false
+        end
+        while true do
+            local result, data = socketClient:recv(10000)
+            if result then
+                if not loginCmd then
+                    if (string.find(data, "aprsc") or string.find(data, "javAPRSSrvr")) then
+                        log.info("服务器", "正在登录...")
+                        if socketClient:send(string.format("user %s pass %d vers 4G-Tracker %s\r\n", sourceCall,
+                            cfg.PASSCODE, VERSION), 10) then
+                            loginCmd = true
+                            recvCnt = 0
+                        else
+                            log.warn("服务器", "登录超时")
                             break
                         end
-                        beaconTime = os.time()
-                        log.info("标信已发送", beaconMsg)
                     end
-                    while #pointTab > 0 do
-                        local pointData = pointTab[1]
-                        local pointTime, latT, lngT = os.date("*t", pointData.time), 'N', 'E'
-                        if pointData.lat < 0 then
-                            latT = 'S'
-                            pointData.lat = -pointData.lat
-                        end
-                        if pointData.lng < 0 then
-                            lngT = 'W'
-                            pointData.lng = -pointData.lng
-                        end
-                        local pointMsg = string.format(
-                            "%s>APUVR:/%02d%02d%02dh%07.2f%s%s%08.2f%s%s%03d/%03d/A=%06d\r\n", sourceCall,
-                            pointTime.hour, pointTime.min, pointTime.sec, pointData.lat, latT, cfg.TABLE, pointData.lng,
-                            lngT, cfg.SYMBOL, pointData.cour, pointData.spd, pointData.alt)
-                        if socketClient:send(pointMsg, 10) then
-                            log.info("位置已发送", pointMsg)
-                            table.remove(pointTab, 1)
-                            sys.wait(5000)
-                        else
-                            log.warn("服务器", "位置数据发送超时")
-                            socketClient:close()
-                            return false
-                        end
-                    end
-                    socketClient:close()
-                    log.info("服务器", "发送完成，连接已关闭")
-                    return true
                 else
-                    if string.find(data, "unverified") then
-                        log.warn("服务器", "服务器登录验证失败，请重新确认呼号和验证码")
-                        break
-                    elseif string.find(data, "full") then
-                        log.warn("服务器", "服务器已满")
-                        break
+                    if string.find(data, " verified") then
+                        log.info("服务器", "登录已成功")
+                        return socketSend(socketClient, sourceCall)
+                    else
+                        if string.find(data, "unverified") then
+                            log.warn("服务器", "服务器登录验证失败，请重新确认呼号和验证码")
+                            break
+                        elseif string.find(data, "full") then
+                            log.warn("服务器", "服务器已满")
+                            break
+                        end
                     end
                 end
-            end
-            recvCnt = recvCnt + 1
-            if recvCnt >= 5 then
-                log.warn("服务器", "未收到期望数据")
+                recvCnt = recvCnt + 1
+                if recvCnt >= 5 then
+                    log.warn("服务器", "未收到期望数据")
+                    break
+                end
+            else
+                log.warn("服务器", "服务器接收超时")
                 break
             end
-        else
-            log.warn("服务器", "服务器接收超时")
-            break
         end
+        socketClient:close()
+        return false
     end
-    socketClient:close()
-    return false
 end
 
 local function pwdCal(callin)
@@ -336,6 +352,13 @@ local function iniChk(cfgfile)
         end
         iniFile.BEACON_INTERVAL = v
     end
+    if iniFile.UDPMODE then
+        if iniFile.UDPMODE ~= '0' and iniFile.UDPMODE ~= '1' then
+            log.error("配置校验", "UDPMODE 错误，只能配置为 0 或 1 ")
+            return false
+        end
+        iniFile.UDPMODE = tonumber(iniFile.UDPMODE)
+    end
     log.info("配置校验", "配置校验已通过")
     return true, iniFile
 end
@@ -368,10 +391,7 @@ local function cfgRead()
 end
 
 sys.taskInit(function()
-    sys.wait(10000)
-    while not gpsFlag do
-        sys.wait(100)
-    end
+    sys.wait(3000)
     if cfgRead() == false then
         log.error("加载配置文件", "加载失败，系统已停止！")
         while true do
@@ -386,7 +406,7 @@ sys.taskInit(function()
         if #pointTab > 0 then
             netProcess()
         end
-        sys.wait(1000)
+        sys.wait(100)
     end
 end)
 
@@ -395,6 +415,7 @@ sys.subscribe("AUTOGPS_READY", function(gpsLib, agpsLib, kind, baudrate)
     agps = agpsLib
     log.info("AUTOGPS_READY", baudrate, kind)
     gps.setUart(3, baudrate, 8, uart.PAR_NONE, uart.STOP_1)
-    gps.setParseItem(true)
-    gpsFlag = true
+    gps.open(gps.DEFAULT, {
+        tag = "4G-Tracker"
+    })
 end)
