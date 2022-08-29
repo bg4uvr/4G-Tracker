@@ -10,8 +10,7 @@ MIN_RUNSPD = 3
 MIN_INTERVAL = 15
 MAX_INTERVAL = 60
 STOP_INTERVAL = 30
-TIMEZONE = 8
-local gps, agps, gpsDataOld
+local imei, sourceCall, beaconMsg, gps, agps, timezone, gpsDataOld
 local beaconTime, reason, noNetCnt = 0, 0, 0
 local pointTab = {}
 local cfg = {
@@ -39,11 +38,11 @@ local function courseDiff(new, old)
 end
 
 local function gpsProcess()
-    if not gps.isOpen() or not gps.isFix() then
+    if not gps.isFix() then
         return
     else
         local gpsData, tLocation = {}, gps.getLocation("DEGREE_MINUTE")
-        gpsData.time = os.time() - TIMEZONE * 60 * 60
+        gpsData.time = os.time() - timezone * 15 * 60
         gpsData.lat = tonumber(tLocation.lat)
         gpsData.lng = tonumber(tLocation.lng)
         gpsData.spd = tonumber(gps.getOrgSpeed())
@@ -54,7 +53,7 @@ local function gpsProcess()
         if tLocation.latType == 'S' then
             gpsData.lat = -gpsData.lat
         end
-        if tLocation.latType == 'W' then
+        if tLocation.lngType == 'W' then
             gpsData.lng = -gpsData.lng
         end
         if not gpsDataOld then
@@ -80,10 +79,8 @@ local function gpsProcess()
     end
 end
 
-local function socketSend(socketClient, sourceCall)
-    local imei, beaconMsg = string.sub(misc.getImei(), -5, -1),
-        string.format("%s>APUVR:>%s\r\n", sourceCall, cfg.BEACON)
-    if BEACON_INTERVAL ~= 0 and os.time() - beaconTime > cfg.BEACON_INTERVAL * 60 then
+local function socketSend(socketClient)
+    if cfg.BEACON_INTERVAL ~= 0 and os.time() - beaconTime > cfg.BEACON_INTERVAL * 60 then
         if not socketClient:send(beaconMsg, 10) then
             log.warn("服务器", "信标发送超时")
             return false
@@ -140,17 +137,14 @@ local function netProcess()
         return false
     end
     noNetCnt = 0
-    local sourceCall, socketClient = cfg.CALLSIGN, nil
-    if cfg.SSID ~= '0' then
-        sourceCall = sourceCall .. '-' .. cfg.SSID
-    end
+    local socketClient
     if cfg.UDPMODE == 1 then
         socketClient = socket.udp()
         if not socketClient:connect(cfg.SERVER, cfg.PORT, 10) then
             log.warn("服务器", "连接UDP服务器失败，稍后自动重试")
             return false
         else
-            return socketSend(socketClient, sourceCall)
+            return socketSend(socketClient)
         end
     else
         local loginCmd, recvCnt = false, 0
@@ -177,7 +171,7 @@ local function netProcess()
                 else
                     if string.find(data, " verified") then
                         log.info("服务器", "登录已成功")
-                        return socketSend(socketClient, sourceCall)
+                        return socketSend(socketClient)
                     else
                         if string.find(data, "unverified") then
                             log.warn("服务器", "服务器登录验证失败，请重新确认呼号和验证码")
@@ -401,10 +395,33 @@ sys.taskInit(function()
         log.info("加载配置文件", "加载已完成")
     end
     update.request()
+    while not gps or not gps.isFix() do
+        sys.wait(100)
+    end
+    log.info("GPS模块", "已经定位")
+    while true do
+        local timeLocal, timeGPS = os.time(), os.time(gps.getUtcTime())
+        timezone = math.floor((math.abs(timeLocal - timeGPS) / (15 * 60)) + 0.5)
+        if timezone <= 48 then
+            if (timeLocal < timeGPS + 7.5 * 60) then
+                timezone = -timezone
+            end
+            log.info("GPS模块", string.format("当前时区: %0.2f", timezone / 4))
+            break
+        else
+            sys.wait(1000)
+        end
+    end
+    sourceCall = cfg.CALLSIGN
+    if cfg.SSID ~= '0' then
+        sourceCall = sourceCall .. '-' .. cfg.SSID
+    end
+    beaconMsg = string.format("%s>APUVR:>%s\r\n", sourceCall, cfg.BEACON)
+    imei = string.sub(misc.getImei(), -4, -1)
     sys.timerLoopStart(gpsProcess, 1000)
     while true do
-        if #pointTab > 0 then
-            netProcess()
+        if #pointTab > 0 and not netProcess() then
+            sys.wait(10000)
         end
         sys.wait(100)
     end
@@ -413,9 +430,10 @@ end)
 sys.subscribe("AUTOGPS_READY", function(gpsLib, agpsLib, kind, baudrate)
     gps = gpsLib
     agps = agpsLib
-    log.info("AUTOGPS_READY", baudrate, kind)
     gps.setUart(3, baudrate, 8, uart.PAR_NONE, uart.STOP_1)
+    gps.setParseItem(1)
     gps.open(gps.DEFAULT, {
         tag = "4G-Tracker"
     })
+    log.info("GPS模块", "型号", kind, "速率", baudrate, "已经打开，等待定位")
 end)
