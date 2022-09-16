@@ -107,9 +107,9 @@ local function socketSend(socketClient)
         if socketClient:send(pointMsg, 10) then
             log.info("位置已发送", pointMsg)
             table.remove(pointTab, 1)
-            if #pointTab > 0 then
-                sys.wait(5000)
-            end
+            -- if #pointTab > 0 then
+            sys.wait(5000)
+            -- end
         else
             log.warn("服务器", "位置数据发送超时")
             socketClient:close()
