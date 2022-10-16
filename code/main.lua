@@ -6,7 +6,7 @@
     https://github.com/bg4uvr/4G-Tracker
 ]] -- 4G-Tracker
 PROJECT = "4G-Tracker"
-VERSION = "0.0.31"
+VERSION = "0.0.32"
 PRODUCT_KEY = "kSgyVmAwL5cLwNzzx9xA9Z5btFlXAb9E"
 require "sys"
 require "net"
@@ -15,7 +15,11 @@ require "socket"
 require "log"
 require "netLed"
 require "autoGPS"
-require "aprs"
+require "bt"
+require "cfg"
+require "msg"
+require "nets"
+require "pos"
 pmd.ldoset(2, pmd.LDO_VLCD)
 netLed.setup(true, pio.P0_1, pio.P0_4)
 LOG_LEVEL = log.LOGLEVEL_INFO
