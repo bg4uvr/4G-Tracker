@@ -6,7 +6,7 @@
     https://github.com/bg4uvr/4G-Tracker
 ]] -- 4G-Tracker
 msgTab = {}
-local imei
+local imei, beaconTime
 
 local function point2msg(pointData)
     local pointTime, latT, lngT = os.date("*t", pointData.time), 'N', 'E'
@@ -27,11 +27,12 @@ end
 sys.taskInit(function()
     sys.waitUntil("CFGLOADED")
     imei = string.sub(misc.getImei(), -4, -1)
+    beaconTime = 0
     local beaconMsg = string.format("%s>APUVR:>%s\r\n", sourceCall, mycfg.BEACON)
     while true do
-        if mycfg.BEACON_INTERVAL ~= 0 and (os.time() + mycfg.PASSCODE) % (mycfg.BEACON_INTERVAL * 60) == 0 then
+        if mycfg.BEACON_INTERVAL ~= 0 and os.time() - beaconTime >= mycfg.BEACON_INTERVAL * 60 then
+            beaconTime = os.time()
             table.insert(msgTab, beaconMsg)
-            sys.wait(1000)
         end
         if pointTab and #pointTab > 0 then
             table.insert(msgTab, point2msg(pointTab[1]))

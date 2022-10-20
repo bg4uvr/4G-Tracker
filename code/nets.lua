@@ -5,7 +5,7 @@
     https://gitee.com/bg4uvr/LTE-Tracker
     https://github.com/bg4uvr/4G-Tracker
 ]] -- 4G-Tracker
-local noNetCnt, lastcall, lastSendTm = 0, "", 0
+local noNetCnt = 0
 
 local function netProcess()
     if not socket.isReady() then
@@ -48,22 +48,24 @@ local function netProcess()
             else
                 if string.find(data, " verified") then
                     log.info("服务器", "登录已成功")
-                    while #msgTab > 0 do
-                        local newcall = string.sub(msgTab[1], 1, string.find(msgTab[1], '>') - 1)
-                        if os.time() - lastSendTm <= 5 and newcall == lastcall then
-                            while (os.time() - lastSendTm <= 5) do
+                    local lastTime, lastCall = os.time(), " "
+                    while os.time() - lastTime <= 18 do
+                        if #msgTab > 0 then
+                            local msgCall = string.sub(msgTab[1], 1, string.find(msgTab[1], '>') - 1)
+                            while lastCall == msgCall and os.time() - lastTime <= 5 do
                                 sys.wait(100)
                             end
+                            if socketClient:send(msgTab[1], 10) then
+                                lastTime = os.time()
+                                lastCall = msgCall
+                                log.info("消息已发送", msgTab[1])
+                                table.remove(msgTab, 1)
+                            else
+                                socketClient:close()
+                                return false
+                            end
                         end
-                        if socketClient:send(msgTab[1], 10) then
-                            lastSendTm = os.time()
-                            lastcall = newcall
-                            log.info("消息已发送", msgTab[1])
-                            table.remove(msgTab, 1)
-                        else
-                            socketClient:close()
-                            return false
-                        end
+                        result, data = socketClient:recv(100)
                     end
                     socketClient:close()
                     return true
