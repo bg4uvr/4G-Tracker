@@ -31,7 +31,12 @@ local function gpsProcess()
         return
     else
         local gpsData, tLocation = {}, gps.getLocation("DEGREE_MINUTE")
-        gpsData.time = os.time() - timezone * 15 * 60
+        local timeLocal, timeGPS = os.time() - 8 * 60 * 60, os.time(gps.getUtcTime())
+        if math.floor(math.abs(timeLocal - timeGPS)) < 10 then
+            gpsData.time = timeLocal
+        else
+            gpsData.time = timeGPS
+        end
         gpsData.lat = tonumber(tLocation.lat)
         gpsData.lng = tonumber(tLocation.lng)
         gpsData.spd = tonumber(gps.getOrgSpeed())
@@ -75,19 +80,6 @@ sys.taskInit(function()
             sys.wait(100)
         end
         log.info("GPS模块", "已经定位")
-        while true do
-            local timeLocal, timeGPS = os.time(), os.time(gps.getUtcTime())
-            timezone = math.floor((math.abs(timeLocal - timeGPS) / (15 * 60)) + 0.5)
-            if timezone <= 48 then
-                if (timeLocal < timeGPS + 7.5 * 60) then
-                    timezone = -timezone
-                end
-                log.info("GPS模块", string.format("当前时区: %0.2f", timezone / 4))
-                break
-            else
-                sys.wait(1000)
-            end
-        end
         while true do
             gpsProcess()
             sys.wait(1000)
